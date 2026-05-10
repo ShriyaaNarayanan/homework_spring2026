@@ -102,6 +102,8 @@ class OnlineRMGRPOConfig:
     sample_log_n: int = 8
     sample_log_max_chars: int = 2500
 
+    advantage_type: str = "group_mean" 
+
 
 def parse_args() -> OnlineRMGRPOConfig:
     ap = argparse.ArgumentParser(description="Train a policy online with a GRPO-family algorithm using a learned reward model.")
@@ -179,6 +181,11 @@ def parse_args() -> OnlineRMGRPOConfig:
     )
     ap.add_argument("--sample_log_n", type=int, default=OnlineRMGRPOConfig.sample_log_n)
     ap.add_argument("--sample_log_max_chars", type=int, default=OnlineRMGRPOConfig.sample_log_max_chars)
+
+    ap.add_argument("--advantage_type", type=str, 
+                default=OnlineRMGRPOConfig.advantage_type,
+                choices=["group_mean", "loo", "rank"])
+    
     args = ap.parse_args()
     return OnlineRMGRPOConfig(**vars(args))
 
@@ -220,6 +227,23 @@ def _compute_group_advantages(
         std = grouped.std(dim=1, keepdim=True, unbiased=False)
         advantages = advantages / (std + eps)
     return advantages.view(N)
+
+def _compute_group_advantages_rank(
+        rewards: torch.Tensor,
+        group_size: int,
+) -> torch.Tensor:
+    N = rewards.shape[0]
+    grouped = rewards.view(-1, group_size) # reshape into [B, group_size]
+
+    rank_values = torch.arange(group_size, device=rewards.device).float()
+    rank_values = rank_values - (group_size - 1) / 2.0  # center at zero
+
+    sorted_indices = torch.argsort(grouped, dim=1)
+
+    ranks = torch.zeros_like(grouped, dtype=torch.float)
+    ranks.scatter_(1, sorted_indices, rank_values.unsqueeze(0).expand_as(grouped))
+
+    return ranks.view(N)
 
 
 def _build_online_algo(cfg: OnlineRMGRPOConfig):
@@ -565,11 +589,15 @@ def main() -> None:
             device=device,
         )
         rewards = torch.tensor(reward_scores, device=device, dtype=torch.float32)
-        advantages = _compute_group_advantages(
-            rewards,
-            cfg.group_size,
-            divide_by_std=_algo_divides_advantages_by_std(cfg.algo),
-        )
+        if cfg.advantage_type == "rank":
+            advantages = _compute_group_advantages_rank(rewards, cfg.group_size)
+        else:
+            advantages = _compute_group_advantages(
+                rewards,
+                cfg.group_size,
+                divide_by_std=_algo_divides_advantages_by_std(cfg.algo),
+            )
+            
         batch = RolloutBatch(
             input_ids=rollout.input_ids,
             attention_mask=rollout.attention_mask,
