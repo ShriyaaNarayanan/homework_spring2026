@@ -101,6 +101,8 @@ class OnlineRMGRPOConfig:
     wandb_enabled: bool = True
     sample_log_n: int = 8
     sample_log_max_chars: int = 2500
+    use_remax: bool = False
+
 
 
 def parse_args() -> OnlineRMGRPOConfig:
@@ -169,6 +171,8 @@ def parse_args() -> OnlineRMGRPOConfig:
         action=argparse.BooleanOptionalAction,
         default=OnlineRMGRPOConfig.grad_checkpointing,
     )
+    ap.add_argument("--use_remax", action=argparse.BooleanOptionalAction, default=OnlineRMGRPOConfig.use_remax)
+
 
     ap.add_argument("--wandb_project", type=str, default=OnlineRMGRPOConfig.wandb_project)
     ap.add_argument("--wandb_name", type=str, default=OnlineRMGRPOConfig.wandb_name)
@@ -207,6 +211,7 @@ def _compute_group_advantages(
     group_size: int,
     eps: float = 1e-6,
     *,
+    greedy_rewards: torch.Tensor | None = None,
     divide_by_std: bool,
 ) -> torch.Tensor:
     # TODO(student): compute one scalar advantage per sampled completion by grouping rewards
@@ -214,8 +219,11 @@ def _compute_group_advantages(
     # dividing by the group standard deviation when `divide_by_std=True`.
     N = rewards.shape[0]
     grouped = rewards.view(-1, group_size)
-    mean = grouped.mean(dim=1, keepdim=True) 
-    advantages = grouped - mean                    
+    if greedy_rewards is not None:
+        baseline = greedy_rewards.unsqueeze(1)
+    else:
+        baseline = grouped.mean(dim=1, keepdim=True)
+    advantages = grouped - baseline
     if divide_by_std:
         std = grouped.std(dim=1, keepdim=True, unbiased=False)
         advantages = advantages / (std + eps)
@@ -543,7 +551,6 @@ def main() -> None:
             max_prompt_tokens=cfg.max_prompt_tokens,
             output_to_cpu=False,
         )
-
         reward_rows = []
         for i, completion_text in enumerate(rollout.completion_texts):
             meta = rollout.task_metas[i]
@@ -565,10 +572,60 @@ def main() -> None:
             device=device,
         )
         rewards = torch.tensor(reward_scores, device=device, dtype=torch.float32)
+        greedy_rewards = None
+        if cfg.use_remax:
+            greedy_sampling_cfg = SamplingConfig(
+                min_new_tokens=cfg.min_new_tokens,
+                max_new_tokens=cfg.max_new_tokens,
+                temperature=0.0,
+                top_p=1.0,
+                top_k=0,
+                repetition_penalty=cfg.repetition_penalty,
+                do_sample=False,
+            )
+            greedy_rollout = sampler.rollout(
+                policy_model=policy_model,
+                prompt_messages=[ex.prompt_messages for ex in prompt_batch],
+                task_names=["synthetic_instruction_following"] * len(prompt_batch),
+                task_metas=[
+                    {
+                        "row_id": ex.row_id,
+                        "prompt_text": ex.prompt_text,
+                        "reference_response_text": ex.reference_response_text,
+                    }
+                    for ex in prompt_batch
+                ],
+                group_size=1,
+                sampling=greedy_sampling_cfg,
+                max_prompt_tokens=cfg.max_prompt_tokens,
+                output_to_cpu=False,
+            )
+            greedy_reward_rows = []
+            for i, completion_text in enumerate(greedy_rollout.completion_texts):
+                meta = greedy_rollout.task_metas[i]
+                greedy_reward_rows.append(
+                    {
+                        "row_id": f"{meta.get('row_id', i)}:greedy",
+                        "prompt_messages": greedy_rollout.prompt_messages[i],
+                        "prompt_text": str(meta.get("prompt_text", "")),
+                        "response_text": _normalize_completion_for_reward_scoring(completion_text),
+                    }
+                )
+            greedy_scores = score_prompt_response_pairs(
+                reward_model,
+                reward_tokenizer,
+                greedy_reward_rows,
+                max_prompt_tokens=cfg.max_prompt_tokens,
+                max_response_tokens=cfg.max_response_tokens,
+                per_device_batch_size=cfg.reward_batch_size,
+                device=device,
+            )
+            greedy_rewards = torch.tensor(greedy_scores, device=device, dtype=torch.float32)
         advantages = _compute_group_advantages(
             rewards,
             cfg.group_size,
             divide_by_std=_algo_divides_advantages_by_std(cfg.algo),
+            greedy_rewards=greedy_rewards,
         )
         batch = RolloutBatch(
             input_ids=rollout.input_ids,
