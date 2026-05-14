@@ -1,0 +1,3 @@
+step,eval/rm_fraction_policy_scores_above_reference,eval/rm_margin_policy_minus_reference_mean,eval/generation_mean_unique_token_ratio
+0,0.25,-5.191627502441406,0.7637543042926227
+25,0.40625,-1.5251846313476562,0.7477516971076535
