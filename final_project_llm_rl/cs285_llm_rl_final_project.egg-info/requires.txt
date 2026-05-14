@@ -1,4 +1,6 @@
+matplotlib>=3.10.9
 modal>=1.0.0
+pandas>=3.0.1
 
 [remote]
 torch<2.7,>=2.5
