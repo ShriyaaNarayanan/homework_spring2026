@@ -330,7 +330,7 @@ uv run modal run --detach scripts/modal_train.py::rm_grpo_train_remote -- \
 
 ### Build Policy Submission to submit to external LLM Judge
 
-replace path with specific run
+Replace path with specific run, using step_000025 for all part2 experiments.
 
 ```
 uv run modal run --detach scripts/modal_train.py::build_policy_submission_remote -- \
@@ -342,6 +342,26 @@ uv run modal run --detach scripts/modal_train.py::build_policy_submission_remote
   --max_new_tokens 256 \
   --temperature 0.0 \
   --top_p 1.0
+```
+
+Run Directory names from Modal to replace path with:
+
+```
+wildchat_min4_judged_5k_grpo_gopo_rm445_v1	
+
+wildchat_min4_judged_5k_gspo_gopo_rm100_rm445_ensemble_mean_v1	
+
+wildchat_min4_judged_5k_gspo_gopo_rm100_rm445_ensemble_min_v1	
+
+wildchat_min4_judged_5k_gspo_gopo_rm100_rm445_ensemble_pess_v1	
+
+wildchat_min4_judged_5k_gspo_gopo_rm445_v1	
+
+wildchat_min4_judged_5k_gspo_rm100_rm445_ensemble_mean_v1	
+
+wildchat_min4_judged_5k_gspo_rm100_rm445_ensemble_min_v1	
+
+wildchat_min4_judged_5k_gspo_rm100_rm445_ensemble_pess_v1	
 ```
 
 ### Get Part 2 Experiment Submissions From Modal
